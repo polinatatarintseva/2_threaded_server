@@ -5,9 +5,54 @@ import socket  # Модуль для работы с сокетами
 import threading  # Модуль для работы с потоками
 import sys    # Модуль для доступа к некоторым функциям и переменным интерпретатора Python
  
-
+import sys  # Модуль для доступа к некоторым функциям и переменным интерпретатора Python
 import signal  # Модуль для обработки сигналов (например, Ctrl+C)
+import logging  # Модуль для логирования
+ 
 
+import os  # Модуль для работы с файловой системой
+ 
+
+
+ 
+
+# Файл для хранения идентификации
+ 
+
+IDENTIFICATION_FILE = 'identification.txt'
+ 
+
+
+ 
+
+# Настройка логирования
+ 
+
+logging.basicConfig(filename='server.log', level=logging.INFO,
+ 
+
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+ 
+
+
+ 
+
+# Глобальные флаги
+ 
+
+server_running = True  # Флаг состояния сервера (работает или завершен)
+ 
+
+server_paused = False  # Флаг состояния прослушивания (активно или на паузе)
+ 
+
+
+ 
+
+# Список для хранения активных клиентских потоков
+ 
+
+client_threads = []
 def client_handler(conn, addr):
  
 
@@ -22,9 +67,18 @@ def client_handler(conn, addr):
     """
     print(f"Подключен клиент {addr}")
  
-
-    msg = ''
+    logging.info(f"Подключен клиент {addr}")
  
+
+    # Записываем информацию об идентификации клиента в файл
+ 
+
+    with open(IDENTIFICATION_FILE, 'a') as f:
+ 
+
+        f.write(f"Клиент {addr} подключился.\n")
+
+     
 
     while True:
  
@@ -55,7 +109,7 @@ def client_handler(conn, addr):
 
         print(f"Получено сообщение от {addr}: {msg}")
  
-
+            logging.info(f"Сообщение от {addr}: {msg}")
         conn.send(data)
  
 
@@ -116,21 +170,103 @@ def client_handler(conn, addr):
 
         print(f"Соединение с клиентом {addr} было разорвано")
  
-
+        logging.warning(f"Соединение с клиентом {addr} было разорвано")
     finally:
  
 
         print(f"Клиент {addr} отключился")
  
+        logging.info(f"Клиент {addr} отключился")
 
         conn.close()
  
 
         # Закрываем соединение с данным клиентом
-
-def main():
+def server_listener(sock):
  
 
+    """
+ 
+
+    Функция для прослушивания входящих подключений.
+ 
+
+    Выполняется в отдельном потоке.
+ 
+
+    """
+ 
+
+    global server_running, server_paused
+ 
+
+
+ 
+
+    while server_running:
+ 
+
+        if server_paused:
+ 
+
+            # Если сервер на паузе, ждем перед проверкой снова
+ 
+
+            threading.Event().wait(1)
+ 
+
+            continue
+ 
+
+
+ 
+
+        try:
+ 
+
+            conn, addr = sock.accept()
+ 
+
+            # Принимаем новое входящее подключение
+ 
+
+            client_thread = threading.Thread(target=client_handler, args=(conn, addr))
+ 
+
+            # Создаем новый поток для обслуживания клиента
+ 
+
+            client_thread.start()
+ 
+
+            # Запускаем поток
+ 
+
+            client_threads.append(client_thread)
+ 
+
+            # Добавляем поток в список активных потоков
+ 
+
+        except socket.timeout:
+ 
+
+            # Если время ожидания соединения истекло, проверяем состояние сервера
+ 
+
+            continue
+ 
+
+        except OSError:
+ 
+
+            # Если сокет был закрыт, выходим из цикла
+ 
+
+            break
+def main():
+ 
+    global server_running, server_paused
     sock = socket.socket()
  
 
@@ -151,16 +287,16 @@ def main():
     # Связываем сокет с адресом и портом.
  
 
-    # Пустая строка '' означает, что сервер будет принимать запросы с любых сетевых интерфейсов.
+    
     sock.listen()
  
 
     # Переводим сокет в режим прослушивания входящих подключений
  
 
-    print("Сервер запущен и ожидает подключений...")
+  
  
-
+    sock.settimeout(1)  # Устанавливаем таймаут для accept(), чтобы проверять флаги
     while True:
  
 
@@ -176,64 +312,29 @@ def main():
         # conn — новый сокет для обмена данными с клиентом
  
 
-        # addr — адрес клиента
+        
+    
+    print("Сервер запущен и ожидает подключений...")
  
 
-        client_thread = threading.Thread(target=client_handler, args=(conn, addr))
- 
+    logging.info("Сервер запущен и ожидает подключений...")
 
-        # Создаем новый поток для обслуживания клиента
- 
-
-        client_thread.start()
- 
-
-        # Запускаем поток
-    # Список для хранения активных потоков
- 
-
-    threads = []
  
 
 
  
-
-    # Обработчик сигнала для корректного завершения сервера при нажатии Ctrl+C
+    # Запускаем поток для прослушивания входящих соединений
  
 
-    def signal_handler(sig, frame):
+    listener_thread = threading.Thread(target=server_listener, args=(sock,))
  
 
-        print("\nЗавершение сервера...")
+    listener_thread.start()
  
-
-        sock.close()
- 
-
-        # Закрываем основной сокет, чтобы остановить accept()
- 
-
-        for t in threads:
- 
-
-            t.join()
- 
-
-            # Ждем завершения всех потоков
- 
-
-        sys.exit(0)
- 
-
 
  
 
-    # Регистрируем обработчик сигнала SIGINT (Ctrl+C)
- 
-
-    signal.signal(signal.SIGINT, signal_handler)
- 
-
+    # Основной поток программы для принятия команд от пользователя
 
  
 
@@ -275,14 +376,209 @@ def main():
 
                 # Если сокет был закрыт, выходим из цикла
  
+            command = input("Введите команду (shutdown, pause, resume, show logs, clear logs, clear id): ").strip().lower()
+ 
 
+
+ 
+
+            if command == 'shutdown':
+ 
+
+                # Завершение работы сервера
+ 
+
+                print("Завершение работы сервера...")
+ 
+
+                logging.info("Сервер завершает работу по команде shutdown.")
+ 
+
+                server_running = False
+ 
+
+                server_paused = False  # На случай, если сервер был на паузе
+ 
+
+                sock.close()  # Закрываем сокет, чтобы выйти из accept()
                 break
  
 
-    finally:
+            elif command == 'pause':
  
 
-        print("Сервер был остановлен.")
+                if not server_paused:
+ 
+
+                    server_paused = True
+ 
+
+                    print("Сервер поставлен на паузу. Новые подключения не принимаются.")
+ 
+
+                    logging.info("Сервер поставлен на паузу по команде pause.")
+ 
+
+                else:
+ 
+
+                    print("Сервер уже находится на паузе.")
+ 
+
+            elif command == 'resume':
+ 
+
+                if server_paused:
+ 
+
+                    server_paused = False
+ 
+
+                    print("Сервер возобновил прием подключений.")
+ 
+
+                    logging.info("Сервер возобновил работу по команде resume.")
+ 
+
+                else:
+ 
+
+                    print("Сервер и так работает.")
+ 
+
+            elif command == 'show logs':
+ 
+
+                # Показываем содержимое файла логов
+ 
+
+                if os.path.exists('server.log'):
+ 
+
+                    with open('server.log', 'r') as log_file:
+ 
+
+                        print("\n=== Содержимое логов ===")
+ 
+
+                        print(log_file.read())
+ 
+
+                        print("=== Конец логов ===\n")
+ 
+
+                else:
+ 
+
+                    print("Лог-файл отсутствует.")
+ 
+
+            elif command == 'clear logs':
+ 
+
+                # Очищаем файл логов
+ 
+
+                if os.path.exists('server.log'):
+ 
+
+                    open('server.log', 'w').close()
+ 
+
+                    print("Логи очищены.")
+ 
+
+                    logging.info("Логи были очищены по команде clear logs.")
+ 
+
+                else:
+ 
+
+                    print("Лог-файл отсутствует.")
+ 
+
+            elif command == 'clear id':
+ 
+
+                # Очищаем файл идентификации
+ 
+
+                if os.path.exists(IDENTIFICATION_FILE):
+ 
+
+                    open(IDENTIFICATION_FILE, 'w').close()
+ 
+
+                    print("Файл идентификации очищен.")
+ 
+
+                    logging.info("Файл идентификации был очищен по команде clear id.")
+ 
+
+                else:
+ 
+
+                    print("Файл идентификации отсутствует.")
+ 
+
+            else:
+ 
+
+                print("Неизвестная команда. Доступные команды: shutdown, pause, resume, show logs, clear logs, clear id.")
+ 
+
+
+ 
+
+    except KeyboardInterrupt:
+ 
+
+        # Обработка сигнала Ctrl+C
+ 
+
+        print("\nЗавершение работы сервера...")
+ 
+
+        logging.info("Сервер завершает работу по сигналу Ctrl+C.")
+ 
+
+        server_running = False
+ 
+
+        server_paused = False
+ 
+
+        sock.close()
+ 
+
+
+ 
+
+    # Ожидаем завершения потока прослушивания
+ 
+
+    listener_thread.join()
+ 
+
+
+ 
+
+    # Ожидаем завершения всех клиентских потоков
+ 
+
+    for t in client_threads:
+ 
+
+        t.join()
+ 
+
+
+ 
+
+    print("Сервер остановлен.")
+ 
+
+    logging.info("Сервер остановлен.")
 
 if __name__ == "__main__":
  
